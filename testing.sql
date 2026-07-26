@@ -72,14 +72,15 @@ CREATE TABLE accounts (
 CREATE TABLE cards (
     card_id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     account_id      BIGINT UNSIGNED NOT NULL,
-    card_number_hash VARCHAR(255) NOT NULL,
+    card_number_hash VARCHAR(255) NOT NULL UNIQUE,
     last_four       CHAR(4)       NOT NULL,
     card_type       VARCHAR(10)   NOT NULL CHECK (card_type IN ('debit','credit')),
     expiry_date     DATE          NOT NULL,
     daily_limit     DECIMAL(10,2) NOT NULL DEFAULT 400.00,
     status          VARCHAR(20)   NOT NULL DEFAULT 'active'
-                        CHECK (status IN ('active','blocked','expired')),
+                        CHECK (status IN ('active','blocked', 'frozen','expired')),
     created_at      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cvv             CHAR(3)		  NOT NULL UNIQUE,
     CONSTRAINT fk_cards_account FOREIGN KEY (account_id)
         REFERENCES accounts(account_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

@@ -240,7 +240,7 @@ def edit_user_info(id, pin):
 
 
 # for seting a new account
-def set_account(user_id, iban):
+def creat_new_account(user_id, iban):
 
     try:
         cursor.execute(
@@ -283,7 +283,7 @@ def get_account(account_id):
         print("Account doesn't exist.")
         return 
 
-    print(account)
+    print(f" -> Account: {account}")
 
 
 
@@ -621,6 +621,7 @@ def add_card_to_account(account_id, card_type, expiry_date, daily_limit):
 
         # Generate a random 16-digit card number
         card_number = str(secrets.randbelow(9_000_000_000_000_000) + 1_000_000_000_000_000)
+        cvv = random.randint(100,999)
 
         last_four = card_number[-4:]
 
@@ -639,9 +640,10 @@ def add_card_to_account(account_id, card_type, expiry_date, daily_limit):
                     last_four,
                     card_type,
                     expiry_date,
-                    daily_limit
+                    daily_limit,
+                    cvv
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     account_id,
@@ -650,6 +652,7 @@ def add_card_to_account(account_id, card_type, expiry_date, daily_limit):
                     card_type,
                     expiry_date,
                     daily_limit,
+                    cvv
                 ),
             )
 
@@ -690,7 +693,7 @@ def add_card_to_account(account_id, card_type, expiry_date, daily_limit):
 
 
 
-def get_card_id(account_id):
+def get_cards(account_id):
     cursor.execute(
         """
         SELECT *
@@ -706,11 +709,37 @@ def get_card_id(account_id):
         print("User account doesn't exist. ")
         return 
 
-    print(cards)
+    print("Cards: ")
+    for card in cards:
+        print(card)
+        print()
 
 
+
+def card_exists(card_id):
+    cursor.execute(
+        """
+        SELECT *
+        FROM cards
+        WHERE card_id = %s
+        """,
+        (card_id,)
+    )
+
+    card = cursor.fetchone()
+
+    if card is None:
+        print("Card doesn't exist.")
+        return False
+
+    return True
 
 def rem_card(card_id):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    
     cursor.execute(
         """
         DELETE FROM cards
@@ -720,10 +749,16 @@ def rem_card(card_id):
     )
 
     conn.commit()
+    print(f"Card with ID: {card_id} was removed.")
+    return True
 
 
 
 def set_card_type(card_id, card_type):
+
+    if card_exists(card_id) is False:
+        return card_exists()    
+
     cursor.execute(
         """
         UPDATE cards
@@ -734,22 +769,35 @@ def set_card_type(card_id, card_type):
     )
     conn.commit()
 
+    return True
 
 
-def set_daily_limit(card_id, limit):
+
+def set_daily_limit(card_id, new_limit):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+        
     cursor.execute(
         """
         UPDATE cards
         SET daily_limit = %s
         WHERE card_id = %s
         """,
-        (limit, card_id)
+        (new_limit, card_id)
     )
     conn.commit()    
+
+    return True
 
 
 
 def set_status(card_id, stat):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    
     cursor.execute(
         """
         UPDATE cards
@@ -760,9 +808,236 @@ def set_status(card_id, stat):
     )
     conn.commit()    
 
+    return True
+
+
+
+# instead of always returning every card on an account.
+def get_card(card_id):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    
+    cursor.execute(
+        """
+        SELECT * 
+        FROM cards 
+        WHERE card_id = %s
+        """,
+        (card_id,)
+    )
+    card = cursor.fetchone()
+
+    if card is None:
+        print("Card doesn't exist.")
+        return 
+
+    return card
+
+
+
+# expire cards automatically
+def expire_cards():
+    
+    cursor.execute(
+        """
+        UPDATE cards
+        SET status = 'expired'
+        WHERE expiry_date < %s
+        """,
+        (datetime.today().strftime('%Y-%m-%d'))
+    )
+    conn.commit()
+
+
+# Could:
+    # mark old card as blocked //
+    # create a new card //
+    # keep on the same account // 
+    # generate new number // 
+    # new expiry date // 
+
+def replace_card(card_id, new_expiry_date):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    old_card = get_card(card_id)
+
+    cursor.execute(
+        """
+        UPDATE cards
+        SET status = 'blocked'
+        WHERE card_id = %s
+        """,
+        (card_id,)
+    )
+    conn.commit()
+    print("Old card is now blocked and will be removed.")
+    rem_card(card_id)
+    printing_sys_lft("Creating new card.......")
+    printing_sys_lft("............",0.10)
+    printing_sys_lft("Done", 0.10)
+
+    # print(old_card[1], old_card[4], old_card[6])
+    return add_card_to_account(old_card[1], old_card[4], new_expiry_date, old_card[6])
+
+
+
+
+def block_card(card_id):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    
+    cursor.execute(
+        """
+        UPDATE cards
+        SET status = 'blocked'
+        WHERE card_id = %s
+        """,
+        (card_id,)
+    )
+    conn.commit()    
+
+    return True
+
+
+
+def unblock_card(card_id):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    
+    cursor.execute(
+        """
+        UPDATE cards
+        SET status = 'active'
+        WHERE card_id = %s
+        """,
+        (card_id,)
+    )
+    conn.commit()    
+
+    return True
+
+
+def is_card_active(card_id):
+
+    card = get_card(card_id)
+
+    if card[7] == "active":
+        return True
+
+    return False
+
+
+def is_card_expired(card_id):
+
+    card = get_card(card_id)
+
+    if card[7] == "expired":
+        return True
+
+    return False
+
+
+
+# Checks
+
+    # active?
+    # not expired?
+    # amount <= daily_limit?
+#  then true, else false 
+def can_spend(card_id, amount):
+
+
+    card = get_card(card_id)
+
+    if is_card_active(card_id) is False:
+        print("Card is inactive. ")
+        return False
+    elif is_card_expired(card_id) is True:
+        print("Card is expired.")
+        return False
+    elif card[6] < amount:
+        print("Amount more than the daily limit.")
+        return False
+
+    return True
     
 
+def count_cards(account_id):
+    cursor.execute(
+        """
+        SELECT * 
+        FROM cards
+        WHERE account_id = %s
+        """,
+        (account_id,)
+    )
+    cards = cursor.fetchall()
 
+    return len(cards)
+
+
+
+def count_active_cards(account_id):
+    cursor.execute(
+        """
+        SELECT * 
+        FROM cards
+        WHERE status= 'active'
+        AND WHERE account_id = %s
+        """,
+        (account_id,)
+    )
+
+    return len(cursor.fetchall())
+
+def count_blocked_cards(account_id):
+    cursor.execute(
+        """
+        SELECT * 
+        FROM cards
+        WHERE status= 'blocked'
+        AND WHERE account_id = %s
+        """,
+        (account_id,)
+    )
+
+    return len(cursor.fetchall())
+
+
+def find_card_by_last_four(last_four):
+    cursor.execute(
+        """
+        SELECT *
+        FROM cards
+        WHERE last_four = %s
+        """,
+        (last_four,)
+    )
+    return cursor.fetchone()
+
+
+def freez_card(card_id):
+
+    if card_exists(card_id) is False:
+        return card_exists()
+
+    cursor.execute(
+        """
+        UPDATE cards
+        SET status = 'frozen'
+        WHERE card_id = %s
+        """,
+        (card_id,)
+    )
+    
 
 # ========================================================================
 #               Internal helpers (row locking + ledger writes)
@@ -1365,10 +1640,24 @@ def process_due_scheduled_payments():
 
 
 if __name__ == "__main__":
+
+    # creat_new_user()
+    # creat_new_account(1, "9876 54321")
+    # deposit(1, 1000.0)
+    # add_card_to_account(1, "debit", "2030-01-01", 100.0)
+
+
+
     get_account(1)
     print()
-    add_card_to_account(1, "debit", "2030-01-01", 100.0)
-    get_card_id(1)
+    get_cards(1)
+    # # add_card_to_account(1, "debit", "2030-01-02", 100.0)
+    # print("ppppppppppp")
+    # get_cards(1)
+    # print("-----------")
+    # replace_card(2, "2040-01-01")
+
+
 
     cursor.close()
     conn.close()
