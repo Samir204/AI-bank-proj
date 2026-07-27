@@ -1037,7 +1037,39 @@ def freez_card(card_id):
         """,
         (card_id,)
     )
-    
+
+
+
+
+def purchase(card_id, merchant, amount):
+
+    if card_exists(card_id) is False:
+        return card_exists(card_id)
+    if can_spend(card_id, amount) is False:
+        return can_spend(card_id, amount)
+
+    withdraw(card_id, amount)
+
+    deposit(merchant, amount)
+
+    return True
+
+
+
+def transfer(card_id, destination_account, amount):
+
+    if card_exists(card_id) is False:
+        return card_exists(card_id)
+    elif card_exists(destination_account) is False:
+        return card_exists(destination_account)
+
+    withdraw(card_id, amount)
+
+    deposit(destination_account, amount)
+
+    return True
+
+
 
 # ========================================================================
 #               Internal helpers (row locking + ledger writes)
@@ -1173,8 +1205,8 @@ def transfer_by_iban(from_account_id, to_iban, amount, description=None, idempot
     """
     Resolves the destination IBAN to an account at this bank and transfers
     funds. NOTE: this only works for IBANs that exist in our own `accounts`
-    table. A transfer to a *different* bank would need to go out over a real
-    payment rail (SEPA Credit Transfer in the EU, SWIFT internationally) -
+    table. A transfer to a (different) bank would need to go out over a real
+    payment rail (SEPA Credit Transfer in the EU, SWIFT internationally)
     that's a settlement network integration this script can't do on its own,
     so unknown IBANs are rejected rather than silently pretending to send
     money that never arrives.
@@ -1193,7 +1225,7 @@ def transfer_by_iban(from_account_id, to_iban, amount, description=None, idempot
 
 def withdraw_via_card(card_id, amount):
     """
-    Withdraws using a bank card, enforcing the card's daily_limit - the
+    Withdraws using a bank card, enforcing the card's daily_limit the
     same control every card issuer applies at ATMs/POS terminals before
     authorizing a transaction.
     """
@@ -1637,6 +1669,37 @@ def process_due_scheduled_payments():
         results.append((scheduled_id, success, result))
 
     return results
+
+
+# checkes the system and returns (no payments) if theres no payments
+# prints n + the payments needed to do 
+# returns false if the account_id doesn't exist
+def check_if_theres_payments(account_id):
+    cursor.execute(
+        """
+        SELECT *
+        FROM scheduled_payments
+        WHERE account_id = %s
+        """,
+        (account_id,)
+    )
+
+    payments = cursor.fetchall()
+
+    if payments is None:
+        print("Account doesn't exsist")
+        return False
+    if len(payments) == 0:
+        print("No payments.")
+        return True
+
+    print(f"You have {len(payments)} deu.")
+    for payment in payments:
+        print()
+        print(payment)
+    return True
+    
+
 
 
 if __name__ == "__main__":

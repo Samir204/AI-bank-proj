@@ -7,7 +7,7 @@ use BankSystem;
 SET NAMES utf8mb4;
 
 -- ---------------------------------------------------------
--- 1. USERS
+-- 1. USERS //
 -- ---------------------------------------------------------
 CREATE TABLE users (
     user_id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -47,7 +47,7 @@ CREATE TABLE user_security (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------
--- 2. ACCOUNTS
+-- 2. ACCOUNTS //
 -- ---------------------------------------------------------
 CREATE TABLE accounts (
     account_id      BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -67,7 +67,7 @@ CREATE TABLE accounts (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------
--- 3. CARDS
+-- 3. CARDS //
 -- ---------------------------------------------------------
 CREATE TABLE cards (
     card_id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -100,7 +100,7 @@ CREATE TABLE mbway_links (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------
--- 5. TRANSACTIONS
+-- 5. TRANSACTIONS //
 -- ---------------------------------------------------------
 CREATE TABLE transactions (
     transaction_id  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -127,7 +127,7 @@ CREATE INDEX idx_transactions_to   ON transactions(to_account_id);
 CREATE INDEX idx_transactions_created ON transactions(created_at);
 
 -- ---------------------------------------------------------
--- 6. PAYMENT CODES
+-- 6. PAYMENT CODES //
 -- ---------------------------------------------------------
 CREATE TABLE payment_codes (
     code            VARCHAR(20)   PRIMARY KEY,
@@ -141,7 +141,7 @@ CREATE TABLE payment_codes (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------
--- 7. SCHEDULED / RECURRING PAYMENTS
+-- 7. SCHEDULED / RECURRING PAYMENTS //
 -- ---------------------------------------------------------
 CREATE TABLE scheduled_payments (
     scheduled_id    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
