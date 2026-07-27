@@ -29,7 +29,7 @@ CREATE TABLE users (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------
--- 1b. USER SECURITY
+-- 1b. USER SECURITY //
 -- ---------------------------------------------------------
 CREATE TABLE user_security (
     user_id             BIGINT UNSIGNED PRIMARY KEY,
@@ -80,7 +80,7 @@ CREATE TABLE cards (
     status          VARCHAR(20)   NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active','blocked', 'frozen','expired')),
     created_at      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    cvv             CHAR(3)		  NOT NULL UNIQUE,
+    cvv             CHAR(3)		  NOT NULL AUTO_INCREMENT,
     CONSTRAINT fk_cards_account FOREIGN KEY (account_id)
         REFERENCES accounts(account_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

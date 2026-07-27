@@ -1702,6 +1702,374 @@ def check_if_theres_payments(account_id):
 
 
 
+
+
+
+
+# ========================================================================
+#               Market Data + AI Recommendations
+# ========================================================================
+# Kept logically separate from the money-movement tables on purpose: a bug
+# in the market scraper or the AI advisor should never be able to touch a
+# real account balance, so nothing here writes to accounts/transactions.
+ 
+def add_market_asset(symbol, name, asset_type='stock'):
+    """asset_type: 'stock', 'etf', or 'crypto'."""
+    try:
+        cursor.execute(
+            "INSERT INTO market_assets (symbol, name, asset_type) VALUES (%s, %s, %s)",
+            (symbol, name, asset_type)
+        )
+        conn.commit()
+        return True, cursor.lastrowid
+    except mysql.connector.errors.IntegrityError:
+        return False, "An asset with that symbol already exists."
+ 
+ 
+def get_asset_by_symbol(symbol):
+    cursor.execute("SELECT * FROM market_assets WHERE symbol = %s", (symbol,))
+    return cursor.fetchone()
+ 
+ 
+def record_market_price(asset_id, price):
+    """
+    Call this every time your scraper pulls a fresh quote. Prices are
+    append-only (never overwritten or updated in place) so you keep a full
+    price history to chart and to feed the AI recommender.
+    """
+    price = Decimal(str(price))
+    if price <= 0:
+        return False, "Price must be positive."
+ 
+    cursor.execute(
+        "INSERT INTO market_prices (asset_id, price) VALUES (%s, %s)",
+        (asset_id, price)
+    )
+    conn.commit()
+    return True, cursor.lastrowid
+ 
+ 
+def get_latest_price(asset_id):
+    cursor.execute(
+        """
+        SELECT price, fetched_at FROM market_prices
+        WHERE asset_id = %s ORDER BY fetched_at DESC LIMIT 1
+        """,
+        (asset_id,)
+    )
+    return cursor.fetchone()
+ 
+ 
+def is_price_stale(asset_id, max_age_minutes=15):
+    """
+    Real trading/advisory systems refuse to act on a quote that's too old -
+    acting on a stale price is how you end up recommending a 'buy' at a
+    price that isn't real anymore.
+    """
+    row = get_latest_price(asset_id)
+    if row is None:
+        return True
+    _, fetched_at = row
+    return (datetime.now() - fetched_at) > timedelta(minutes=max_age_minutes)
+ 
+ 
+def get_price_history(asset_id, start=None, end=None, limit=100):
+    """For charting, or for feeding a model that needs a price series."""
+    query = "SELECT price, fetched_at FROM market_prices WHERE asset_id = %s"
+    params = [asset_id]
+    if start:
+        query += " AND fetched_at >= %s"
+        params.append(start)
+    if end:
+        query += " AND fetched_at <= %s"
+        params.append(end)
+    query += " ORDER BY fetched_at DESC LIMIT %s"
+    params.append(limit)
+ 
+    cursor.execute(query, tuple(params))
+    return cursor.fetchall()
+ 
+ 
+def save_ai_recommendation(user_id, asset_id, action, confidence=None, reasoning=None):
+    """action: 'buy', 'sell', or 'hold'."""
+    if action not in ('buy', 'sell', 'hold'):
+        return False, "Invalid action."
+ 
+    cursor.execute(
+        """
+        INSERT INTO ai_recommendations (user_id, asset_id, action, confidence, reasoning)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (user_id, asset_id, action, confidence, reasoning)
+    )
+    conn.commit()
+    return True, cursor.lastrowid
+ 
+ 
+def get_recommendations_for_user(user_id, limit=20):
+    cursor.execute(
+        """
+        SELECT r.recommendation_id, a.symbol, r.action, r.confidence, r.reasoning, r.created_at
+        FROM ai_recommendations r
+        JOIN market_assets a ON a.asset_id = r.asset_id
+        WHERE r.user_id = %s
+        ORDER BY r.created_at DESC
+        LIMIT %s
+        """,
+        (user_id, limit)
+    )
+    return cursor.fetchall()
+ 
+ 
+def get_latest_recommendation_per_asset(user_id):
+    """
+    Only the most recent recommendation per asset - a user shouldn't see a
+    three-day-old 'buy' sitting next to today's 'sell' for the same stock.
+    """
+    cursor.execute(
+        """
+        SELECT r.asset_id, a.symbol, r.action, r.confidence, r.created_at
+        FROM ai_recommendations r
+        JOIN market_assets a ON a.asset_id = r.asset_id
+        WHERE r.user_id = %s
+          AND r.created_at = (
+              SELECT MAX(r2.created_at)
+              FROM ai_recommendations r2
+              WHERE r2.user_id = r.user_id AND r2.asset_id = r.asset_id
+          )
+        ORDER BY a.symbol
+        """,
+        (user_id,)
+    )
+    return cursor.fetchall()
+ 
+ 
+# ========================================================================
+#               Audit Log
+# ========================================================================
+# Every action that touches money, auth, or account status should write a
+# row here. Real banks log this by regulatory requirement (traceability
+# for fraud investigations and disputes) - it isn't optional the way it
+# might feel for a student project.
+ 
+def log_audit_event(user_id, action, ip_address=None, details=None):
+    """
+    Never raises - a logging failure should never take down the operation
+    that triggered it. Prints a warning instead if the insert fails.
+    """
+    try:
+        details_json = _json.dumps(details) if details is not None else None
+        cursor.execute(
+            """
+            INSERT INTO audit_log (user_id, action, ip_address, details)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (user_id, action, ip_address, details_json)
+        )
+        conn.commit()
+        return True
+    except mysql.connector.Error as err:
+        print(f"[audit log warning] failed to record '{action}' for user {user_id}: {err}")
+        return False
+ 
+ 
+def get_audit_log_for_user(user_id, limit=50):
+    cursor.execute(
+        """
+        SELECT log_id, action, ip_address, details, created_at
+        FROM audit_log
+        WHERE user_id = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (user_id, limit)
+    )
+    return cursor.fetchall()
+ 
+ 
+def get_recent_audit_events(limit=100):
+    """Global activity feed - what an ops/admin dashboard would show."""
+    cursor.execute(
+        "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT %s",
+        (limit,)
+    )
+    return cursor.fetchall()
+ 
+ 
+def search_audit_log(action=None, user_id=None, start_date=None, end_date=None, limit=100):
+    """
+    Flexible filter for compliance/fraud investigations - e.g. 'show me
+    every withdrawal across all users in the last 24 hours.'
+    """
+    query = "SELECT * FROM audit_log WHERE 1=1"
+    params = []
+    if action:
+        query += " AND action = %s"
+        params.append(action)
+    if user_id:
+        query += " AND user_id = %s"
+        params.append(user_id)
+    if start_date:
+        query += " AND created_at >= %s"
+        params.append(start_date)
+    if end_date:
+        query += " AND created_at <= %s"
+        params.append(end_date)
+    query += " ORDER BY created_at DESC LIMIT %s"
+    params.append(limit)
+ 
+    cursor.execute(query, tuple(params))
+    return cursor.fetchall()
+ 
+ 
+# ========================================================================
+#               Sessions (login/logout, token-based auth)
+# ========================================================================
+# Same principle as the password/masterKey hashing from your earlier
+# password-manager project: the raw session token is shown to the caller
+# ONCE and only its hash is stored, so a leaked database dump doesn't hand
+# out working login sessions.
+ 
+def _hash_token(raw_token):
+    return hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+ 
+ 
+def create_session(user_id, expires_in_minutes=30):
+    """
+    Call this on successful login. Returns (session_id, raw_token) - give
+    raw_token to the client (cookie/header) and never store it anywhere
+    yourself; only its hash lives in the DB.
+    """
+    session_id = str(uuid.uuid4())
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw_token)
+    expires_at = datetime.now() + timedelta(minutes=expires_in_minutes)
+ 
+    cursor.execute(
+        """
+        INSERT INTO sessions (session_id, user_id, token_hash, expires_at)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (session_id, user_id, token_hash, expires_at)
+    )
+    conn.commit()
+ 
+    log_audit_event(user_id, 'LOGIN', details={'session_id': session_id})
+ 
+    return session_id, raw_token
+ 
+ 
+def validate_session(raw_token):
+    """
+    Call this on every authenticated request. Returns the user_id if the
+    token is valid, not revoked, and not expired - otherwise None.
+    """
+    token_hash = _hash_token(raw_token)
+    cursor.execute(
+        "SELECT user_id, expires_at, revoked FROM sessions WHERE token_hash = %s",
+        (token_hash,)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+ 
+    user_id, expires_at, revoked = row
+    if revoked or expires_at < datetime.now():
+        return None
+ 
+    return user_id
+ 
+ 
+def revoke_session(session_id):
+    """Logout for a single device/session."""
+    cursor.execute("UPDATE sessions SET revoked = TRUE WHERE session_id = %s", (session_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+ 
+ 
+def revoke_all_sessions_for_user(user_id):
+    """
+    'Log out everywhere' - a real feature in every major banking app for
+    when you suspect your account may be compromised.
+    """
+    cursor.execute("UPDATE sessions SET revoked = TRUE WHERE user_id = %s", (user_id,))
+    conn.commit()
+    log_audit_event(user_id, 'LOGOUT_ALL_DEVICES')
+    return cursor.rowcount
+ 
+ 
+def get_active_sessions_for_user(user_id):
+    """'Manage your devices' screen - active, non-revoked, non-expired sessions."""
+    cursor.execute(
+        """
+        SELECT session_id, created_at, expires_at
+        FROM sessions
+        WHERE user_id = %s AND revoked = FALSE AND expires_at > NOW()
+        ORDER BY created_at DESC
+        """,
+        (user_id,)
+    )
+    return cursor.fetchall()
+ 
+ 
+def cleanup_expired_sessions():
+    """
+    Periodic maintenance job (same batch-job pattern as
+    process_due_scheduled_payments()) - clears out sessions that expired a
+    while ago so the table doesn't grow forever.
+    """
+    cursor.execute("DELETE FROM sessions WHERE expires_at < NOW() - INTERVAL 7 DAY")
+    conn.commit()
+    return cursor.rowcount
+ 
+ 
+# ========================================================================
+#               Views (read-only convenience wrappers)
+# ========================================================================
+ 
+def get_account_overview(user_id):
+    """Quick balance + account summary - what user_account_overview was built for."""
+    cursor.execute("SELECT * FROM user_account_overview WHERE user_id = %s", (user_id,))
+    return cursor.fetchall()
+ 
+ 
+def get_upcoming_payments_for_user(user_id):
+    cursor.execute("SELECT * FROM upcoming_payments WHERE user_id = %s", (user_id,))
+    return cursor.fetchall()
+ 
+ 
+def get_all_upcoming_payments():
+    """Ops-style view across every user - which standing orders are due in the next 7 days."""
+    cursor.execute("SELECT * FROM upcoming_payments")
+    return cursor.fetchall()
+ 
+ 
+if __name__ == "__main__":
+ 
+    # creat_new_user()
+    # creat_new_account(1, "9876 54321")
+    # deposit(1, 1000.0)
+    # add_card_to_account(1, "debit", "2030-01-01", 100.0)
+ 
+ 
+ 
+    get_account(1)
+    print()
+    get_cards(1)
+    # # add_card_to_account(1, "debit", "2030-01-02", 100.0)
+    # print("ppppppppppp")
+    # get_cards(1)
+    # print("-----------")
+    # replace_card(2, "2040-01-01")
+ 
+ 
+ 
+    cursor.close()
+    conn.close()
+
+
+
+ 
 if __name__ == "__main__":
 
     # creat_new_user()
