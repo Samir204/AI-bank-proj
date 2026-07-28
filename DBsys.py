@@ -8,6 +8,8 @@ import hashlib
 from datetime import datetime, date, timedelta
 import calendar
 import secrets
+import uuid
+import json as _json
 
 
 
@@ -114,7 +116,7 @@ def creat_new_user():
     try:
         cursor.execute(
             """
-            INSERT INTO Users
+            INSERT INTO users
             (full_name, email, phone_number, national_id,
              date_of_birth, address, pin_hash)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -172,8 +174,7 @@ def edit_user_info(id, pin):
         SELECT user_id
         FROM users
         WHERE user_id = %s
-          AND full_name = %s
-          AND pin = %s
+          AND pin_hash = %s
         """,
         (id, pin)
     )
@@ -737,7 +738,7 @@ def card_exists(card_id):
 def rem_card(card_id):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     
     cursor.execute(
@@ -757,7 +758,7 @@ def rem_card(card_id):
 def set_card_type(card_id, card_type):
 
     if card_exists(card_id) is False:
-        return card_exists()    
+        return False    
 
     cursor.execute(
         """
@@ -776,7 +777,7 @@ def set_card_type(card_id, card_type):
 def set_daily_limit(card_id, new_limit):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
         
     cursor.execute(
         """
@@ -795,7 +796,7 @@ def set_daily_limit(card_id, new_limit):
 def set_status(card_id, stat):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     
     cursor.execute(
@@ -816,7 +817,7 @@ def set_status(card_id, stat):
 def get_card(card_id):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     
     cursor.execute(
@@ -861,7 +862,7 @@ def expire_cards():
 def replace_card(card_id, new_expiry_date):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     old_card = get_card(card_id)
 
@@ -889,7 +890,7 @@ def replace_card(card_id, new_expiry_date):
 def block_card(card_id):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     
     cursor.execute(
@@ -909,7 +910,7 @@ def block_card(card_id):
 def unblock_card(card_id):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     
     cursor.execute(
@@ -928,6 +929,8 @@ def unblock_card(card_id):
 def is_card_active(card_id):
 
     card = get_card(card_id)
+    if not card:
+        return False
 
     if card[7] == "active":
         return True
@@ -936,13 +939,18 @@ def is_card_active(card_id):
 
 
 def is_card_expired(card_id):
-
+    """
+    Checks the actual expiry_date, not just the status column - status only
+    gets flipped to 'expired' when expire_cards() runs, so relying on status
+    alone would say a card is fine right up until the next batch run even
+    if its expiry date has already passed.
+    """
     card = get_card(card_id)
-
-    if card[7] == "expired":
+    if not card:
         return True
 
-    return False
+    expiry_date, status = card[5], card[7]
+    return status == "expired" or expiry_date < date.today()
 
 
 
@@ -954,8 +962,10 @@ def is_card_expired(card_id):
 #  then true, else false 
 def can_spend(card_id, amount):
 
-
+    amount = Decimal(str(amount))
     card = get_card(card_id)
+    if not card:
+        return False
 
     if is_card_active(card_id) is False:
         print("Card is inactive. ")
@@ -963,8 +973,11 @@ def can_spend(card_id, amount):
     elif is_card_expired(card_id) is True:
         print("Card is expired.")
         return False
-    elif card[6] < amount:
-        print("Amount more than the daily limit.")
+
+    daily_limit = card[6]
+    spent_today = _card_spent_today(card_id)
+    if spent_today + amount > daily_limit:
+        print("Amount would exceed the daily limit.")
         return False
 
     return True
@@ -988,31 +1001,37 @@ def count_cards(account_id):
 def count_active_cards(account_id):
     cursor.execute(
         """
-        SELECT * 
+        SELECT COUNT(*)
         FROM cards
-        WHERE status= 'active'
-        AND WHERE account_id = %s
+        WHERE status = 'active'
+          AND account_id = %s
         """,
         (account_id,)
     )
 
-    return len(cursor.fetchall())
+    return cursor.fetchone()[0]
 
 def count_blocked_cards(account_id):
     cursor.execute(
         """
-        SELECT * 
+        SELECT COUNT(*)
         FROM cards
-        WHERE status= 'blocked'
-        AND WHERE account_id = %s
+        WHERE status = 'blocked'
+          AND account_id = %s
         """,
         (account_id,)
     )
 
-    return len(cursor.fetchall())
+    return cursor.fetchone()[0]
 
 
 def find_card_by_last_four(last_four):
+    """
+    Returns ALL matching cards, not just one - the last 4 digits are only
+    10,000 possible combinations, so they're not unique across a real card
+    base. Use this to narrow down candidates (e.g. 'which of your cards
+    ends in 1234?'), not as a unique lookup key.
+    """
     cursor.execute(
         """
         SELECT *
@@ -1021,13 +1040,13 @@ def find_card_by_last_four(last_four):
         """,
         (last_four,)
     )
-    return cursor.fetchone()
+    return cursor.fetchall()
 
 
 def freez_card(card_id):
 
     if card_exists(card_id) is False:
-        return card_exists()
+        return False
 
     cursor.execute(
         """
@@ -1037,37 +1056,98 @@ def freez_card(card_id):
         """,
         (card_id,)
     )
-
-
-
-
-def purchase(card_id, merchant, amount):
-
-    if card_exists(card_id) is False:
-        return card_exists(card_id)
-    if can_spend(card_id, amount) is False:
-        return can_spend(card_id, amount)
-
-    withdraw(card_id, amount)
-
-    deposit(merchant, amount)
-
+    conn.commit()
     return True
 
 
 
-def transfer(card_id, destination_account, amount):
 
+def _account_exists(account_id):
+    cursor.execute("SELECT 1 FROM accounts WHERE account_id = %s", (account_id,))
+    return cursor.fetchone() is not None
+
+
+def purchase(card_id, merchant_account_id, amount):
+    """
+    A card purchase: debits the cardholder via the card (so daily_limit,
+    active/expiry checks, locking, and the ledger all apply - the same
+    protections withdraw_via_card() gives any other card withdrawal) and
+    credits the merchant's account. If crediting the merchant fails for any
+    reason, the cardholder is refunded and the original debit is marked
+    'reversed' rather than silently leaving them out of pocket.
+    """
     if card_exists(card_id) is False:
-        return card_exists(card_id)
-    elif card_exists(destination_account) is False:
-        return card_exists(destination_account)
+        return False, "Card doesn't exist."
+    if _account_exists(merchant_account_id) is False:
+        return False, "Merchant account doesn't exist."
 
-    withdraw(card_id, amount)
+    debit_ok, debit_result = withdraw_via_card(card_id, amount)
+    if not debit_ok:
+        return False, debit_result
 
-    deposit(destination_account, amount)
+    credit_ok, credit_result = deposit_funds(
+        merchant_account_id, amount, description=f"Purchase via card {card_id}"
+    )
+    if not credit_ok:
+        cursor.execute(
+            "SELECT from_account_id FROM transactions WHERE transaction_id = %s",
+            (debit_result,)
+        )
+        row = cursor.fetchone()
+        cardholder_account_id = row[0] if row else None
+        if cardholder_account_id:
+            deposit_funds(
+                cardholder_account_id, amount,
+                description=f"Refund for failed purchase (tx {debit_result})"
+            )
+            cursor.execute(
+                "UPDATE transactions SET status = 'reversed' WHERE transaction_id = %s",
+                (debit_result,)
+            )
+            conn.commit()
+        return False, f"Purchase failed and was refunded: {credit_result}"
 
-    return True
+    return True, {"debit_transaction": debit_result, "credit_transaction": credit_result}
+
+
+def transfer(card_id, destination_account_id, amount):
+    """
+    Card-initiated transfer to another account at this bank. Debits via
+    the card (daily_limit/active/expiry enforced) and credits the
+    destination account, refunding the cardholder if the credit leg fails.
+    """
+    if card_exists(card_id) is False:
+        return False, "Card doesn't exist."
+    if _account_exists(destination_account_id) is False:
+        return False, "Destination account doesn't exist."
+
+    debit_ok, debit_result = withdraw_via_card(card_id, amount)
+    if not debit_ok:
+        return False, debit_result
+
+    credit_ok, credit_result = deposit_funds(
+        destination_account_id, amount, description=f"Transfer via card {card_id}"
+    )
+    if not credit_ok:
+        cursor.execute(
+            "SELECT from_account_id FROM transactions WHERE transaction_id = %s",
+            (debit_result,)
+        )
+        row = cursor.fetchone()
+        cardholder_account_id = row[0] if row else None
+        if cardholder_account_id:
+            deposit_funds(
+                cardholder_account_id, amount,
+                description=f"Refund for failed transfer (tx {debit_result})"
+            )
+            cursor.execute(
+                "UPDATE transactions SET status = 'reversed' WHERE transaction_id = %s",
+                (debit_result,)
+            )
+            conn.commit()
+        return False, f"Transfer failed and was refunded: {credit_result}"
+
+    return True, {"debit_transaction": debit_result, "credit_transaction": credit_result}
 
 
 
@@ -1223,6 +1303,22 @@ def transfer_by_iban(from_account_id, to_iban, amount, description=None, idempot
     return transfer_funds(from_account_id, to_account_id, amount, description, idempotency_key)
 
 
+def _card_spent_today(card_id):
+    """
+    Shared by withdraw_via_card() and can_spend() so the two can't drift
+    out of sync on what 'already spent today' means.
+    """
+    cursor.execute(
+        """
+        SELECT COALESCE(SUM(amount), 0) FROM transactions
+        WHERE transaction_type = 'withdrawal_card' AND reference = %s
+          AND status = 'completed' AND DATE(created_at) = CURDATE()
+        """,
+        (str(card_id),)
+    )
+    return cursor.fetchone()[0]
+
+
 def withdraw_via_card(card_id, amount):
     """
     Withdraws using a bank card, enforcing the card's daily_limit the
@@ -1247,15 +1343,7 @@ def withdraw_via_card(card_id, amount):
     if expiry_date < date.today():
         return False, "Card has expired."
 
-    cursor.execute(
-        """
-        SELECT COALESCE(SUM(amount), 0) FROM transactions
-        WHERE transaction_type = 'withdrawal_card' AND reference = %s
-          AND status = 'completed' AND DATE(created_at) = CURDATE()
-        """,
-        (str(card_id),)
-    )
-    spent_today = cursor.fetchone()[0]
+    spent_today = _card_spent_today(card_id)
 
     if spent_today + amount > daily_limit:
         return False, f"Daily card limit exceeded (limit: {daily_limit}, already used: {spent_today})."
@@ -1702,17 +1790,13 @@ def check_if_theres_payments(account_id):
 
 
 
-
-
-
-
 # ========================================================================
 #               Market Data + AI Recommendations
 # ========================================================================
 # Kept logically separate from the money-movement tables on purpose: a bug
 # in the market scraper or the AI advisor should never be able to touch a
 # real account balance, so nothing here writes to accounts/transactions.
- 
+
 def add_market_asset(symbol, name, asset_type='stock'):
     """asset_type: 'stock', 'etf', or 'crypto'."""
     try:
@@ -1724,13 +1808,13 @@ def add_market_asset(symbol, name, asset_type='stock'):
         return True, cursor.lastrowid
     except mysql.connector.errors.IntegrityError:
         return False, "An asset with that symbol already exists."
- 
- 
+
+
 def get_asset_by_symbol(symbol):
     cursor.execute("SELECT * FROM market_assets WHERE symbol = %s", (symbol,))
     return cursor.fetchone()
- 
- 
+
+
 def record_market_price(asset_id, price):
     """
     Call this every time your scraper pulls a fresh quote. Prices are
@@ -1740,15 +1824,15 @@ def record_market_price(asset_id, price):
     price = Decimal(str(price))
     if price <= 0:
         return False, "Price must be positive."
- 
+
     cursor.execute(
         "INSERT INTO market_prices (asset_id, price) VALUES (%s, %s)",
         (asset_id, price)
     )
     conn.commit()
     return True, cursor.lastrowid
- 
- 
+
+
 def get_latest_price(asset_id):
     cursor.execute(
         """
@@ -1758,8 +1842,8 @@ def get_latest_price(asset_id):
         (asset_id,)
     )
     return cursor.fetchone()
- 
- 
+
+
 def is_price_stale(asset_id, max_age_minutes=15):
     """
     Real trading/advisory systems refuse to act on a quote that's too old -
@@ -1771,8 +1855,8 @@ def is_price_stale(asset_id, max_age_minutes=15):
         return True
     _, fetched_at = row
     return (datetime.now() - fetched_at) > timedelta(minutes=max_age_minutes)
- 
- 
+
+
 def get_price_history(asset_id, start=None, end=None, limit=100):
     """For charting, or for feeding a model that needs a price series."""
     query = "SELECT price, fetched_at FROM market_prices WHERE asset_id = %s"
@@ -1785,16 +1869,16 @@ def get_price_history(asset_id, start=None, end=None, limit=100):
         params.append(end)
     query += " ORDER BY fetched_at DESC LIMIT %s"
     params.append(limit)
- 
+
     cursor.execute(query, tuple(params))
     return cursor.fetchall()
- 
- 
+
+
 def save_ai_recommendation(user_id, asset_id, action, confidence=None, reasoning=None):
     """action: 'buy', 'sell', or 'hold'."""
     if action not in ('buy', 'sell', 'hold'):
         return False, "Invalid action."
- 
+
     cursor.execute(
         """
         INSERT INTO ai_recommendations (user_id, asset_id, action, confidence, reasoning)
@@ -1804,8 +1888,8 @@ def save_ai_recommendation(user_id, asset_id, action, confidence=None, reasoning
     )
     conn.commit()
     return True, cursor.lastrowid
- 
- 
+
+
 def get_recommendations_for_user(user_id, limit=20):
     cursor.execute(
         """
@@ -1819,8 +1903,8 @@ def get_recommendations_for_user(user_id, limit=20):
         (user_id, limit)
     )
     return cursor.fetchall()
- 
- 
+
+
 def get_latest_recommendation_per_asset(user_id):
     """
     Only the most recent recommendation per asset - a user shouldn't see a
@@ -1842,8 +1926,8 @@ def get_latest_recommendation_per_asset(user_id):
         (user_id,)
     )
     return cursor.fetchall()
- 
- 
+
+
 # ========================================================================
 #               Audit Log
 # ========================================================================
@@ -1851,7 +1935,7 @@ def get_latest_recommendation_per_asset(user_id):
 # row here. Real banks log this by regulatory requirement (traceability
 # for fraud investigations and disputes) - it isn't optional the way it
 # might feel for a student project.
- 
+
 def log_audit_event(user_id, action, ip_address=None, details=None):
     """
     Never raises - a logging failure should never take down the operation
@@ -1871,8 +1955,8 @@ def log_audit_event(user_id, action, ip_address=None, details=None):
     except mysql.connector.Error as err:
         print(f"[audit log warning] failed to record '{action}' for user {user_id}: {err}")
         return False
- 
- 
+
+
 def get_audit_log_for_user(user_id, limit=50):
     cursor.execute(
         """
@@ -1885,8 +1969,8 @@ def get_audit_log_for_user(user_id, limit=50):
         (user_id, limit)
     )
     return cursor.fetchall()
- 
- 
+
+
 def get_recent_audit_events(limit=100):
     """Global activity feed - what an ops/admin dashboard would show."""
     cursor.execute(
@@ -1894,8 +1978,8 @@ def get_recent_audit_events(limit=100):
         (limit,)
     )
     return cursor.fetchall()
- 
- 
+
+
 def search_audit_log(action=None, user_id=None, start_date=None, end_date=None, limit=100):
     """
     Flexible filter for compliance/fraud investigations - e.g. 'show me
@@ -1917,11 +2001,11 @@ def search_audit_log(action=None, user_id=None, start_date=None, end_date=None, 
         params.append(end_date)
     query += " ORDER BY created_at DESC LIMIT %s"
     params.append(limit)
- 
+
     cursor.execute(query, tuple(params))
     return cursor.fetchall()
- 
- 
+
+
 # ========================================================================
 #               Sessions (login/logout, token-based auth)
 # ========================================================================
@@ -1929,11 +2013,11 @@ def search_audit_log(action=None, user_id=None, start_date=None, end_date=None, 
 # password-manager project: the raw session token is shown to the caller
 # ONCE and only its hash is stored, so a leaked database dump doesn't hand
 # out working login sessions.
- 
+
 def _hash_token(raw_token):
     return hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
- 
- 
+
+
 def create_session(user_id, expires_in_minutes=30):
     """
     Call this on successful login. Returns (session_id, raw_token) - give
@@ -1944,7 +2028,7 @@ def create_session(user_id, expires_in_minutes=30):
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)
     expires_at = datetime.now() + timedelta(minutes=expires_in_minutes)
- 
+
     cursor.execute(
         """
         INSERT INTO sessions (session_id, user_id, token_hash, expires_at)
@@ -1953,12 +2037,12 @@ def create_session(user_id, expires_in_minutes=30):
         (session_id, user_id, token_hash, expires_at)
     )
     conn.commit()
- 
+
     log_audit_event(user_id, 'LOGIN', details={'session_id': session_id})
- 
+
     return session_id, raw_token
- 
- 
+
+
 def validate_session(raw_token):
     """
     Call this on every authenticated request. Returns the user_id if the
@@ -1972,21 +2056,21 @@ def validate_session(raw_token):
     row = cursor.fetchone()
     if row is None:
         return None
- 
+
     user_id, expires_at, revoked = row
     if revoked or expires_at < datetime.now():
         return None
- 
+
     return user_id
- 
- 
+
+
 def revoke_session(session_id):
     """Logout for a single device/session."""
     cursor.execute("UPDATE sessions SET revoked = TRUE WHERE session_id = %s", (session_id,))
     conn.commit()
     return cursor.rowcount > 0
- 
- 
+
+
 def revoke_all_sessions_for_user(user_id):
     """
     'Log out everywhere' - a real feature in every major banking app for
@@ -1996,8 +2080,8 @@ def revoke_all_sessions_for_user(user_id):
     conn.commit()
     log_audit_event(user_id, 'LOGOUT_ALL_DEVICES')
     return cursor.rowcount
- 
- 
+
+
 def get_active_sessions_for_user(user_id):
     """'Manage your devices' screen - active, non-revoked, non-expired sessions."""
     cursor.execute(
@@ -2010,8 +2094,8 @@ def get_active_sessions_for_user(user_id):
         (user_id,)
     )
     return cursor.fetchall()
- 
- 
+
+
 def cleanup_expired_sessions():
     """
     Periodic maintenance job (same batch-job pattern as
@@ -2021,55 +2105,29 @@ def cleanup_expired_sessions():
     cursor.execute("DELETE FROM sessions WHERE expires_at < NOW() - INTERVAL 7 DAY")
     conn.commit()
     return cursor.rowcount
- 
- 
+
+
 # ========================================================================
 #               Views (read-only convenience wrappers)
 # ========================================================================
- 
+
 def get_account_overview(user_id):
     """Quick balance + account summary - what user_account_overview was built for."""
     cursor.execute("SELECT * FROM user_account_overview WHERE user_id = %s", (user_id,))
     return cursor.fetchall()
- 
- 
+
+
 def get_upcoming_payments_for_user(user_id):
     cursor.execute("SELECT * FROM upcoming_payments WHERE user_id = %s", (user_id,))
     return cursor.fetchall()
- 
- 
+
+
 def get_all_upcoming_payments():
     """Ops-style view across every user - which standing orders are due in the next 7 days."""
     cursor.execute("SELECT * FROM upcoming_payments")
     return cursor.fetchall()
- 
- 
-if __name__ == "__main__":
- 
-    # creat_new_user()
-    # creat_new_account(1, "9876 54321")
-    # deposit(1, 1000.0)
-    # add_card_to_account(1, "debit", "2030-01-01", 100.0)
- 
- 
- 
-    get_account(1)
-    print()
-    get_cards(1)
-    # # add_card_to_account(1, "debit", "2030-01-02", 100.0)
-    # print("ppppppppppp")
-    # get_cards(1)
-    # print("-----------")
-    # replace_card(2, "2040-01-01")
- 
- 
- 
-    cursor.close()
-    conn.close()
 
 
-
- 
 if __name__ == "__main__":
 
     # creat_new_user()
