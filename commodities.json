@@ -1,0 +1,63 @@
+{
+    "LastUpdated": "2026-07-28T19:46:25.771827",
+    "Commodities": {
+        "PreciousMetals": {
+            "Gold": 2642.5,
+            "Silver": 31.25,
+            "Platinum": 965.0,
+            "Palladium": 1020.0
+        },
+        "Energy": {
+            "BrentCrude": 73.12,
+            "WTICrude": 69.48,
+            "NaturalGas": 2.94,
+            "HeatingOil": 2.25,
+            "Gasoline": 2.01
+        },
+        "IndustrialMetals": {
+            "Copper": 9070.5,
+            "Aluminium": 2642.0,
+            "Nickel": 17245.0,
+            "Zinc": 2985.0,
+            "Lead": 2045.0,
+            "Tin": 31550.0
+        },
+        "Agriculture": {
+            "Wheat": 570.25,
+            "Corn": 420.5,
+            "Soybeans": 1015.75,
+            "Rice": 15.8,
+            "Coffee": 245.3,
+            "Cocoa": 7150.0,
+            "Sugar": 21.45,
+            "Cotton": 72.1
+        },
+        "Livestock": {
+            "LiveCattle": 187.35,
+            "LeanHogs": 82.45,
+            "FeederCattle": 252.1
+        }
+    },
+    "Currencies": {
+        "USD": 1.0,
+        "EUR": 0.92,
+        "GBP": 0.79,
+        "JPY": 151.45,
+        "CAD": 1.36,
+        "AUD": 1.52,
+        "CHF": 0.9,
+        "NZD": 1.66,
+        "CNY": 7.23,
+        "HKD": 7.82,
+        "SEK": 10.74,
+        "NOK": 10.91,
+        "DKK": 6.87,
+        "SGD": 1.35,
+        "INR": 83.42,
+        "BRL": 5.12,
+        "MXN": 16.58,
+        "ZAR": 18.84,
+        "TRY": 32.21,
+        "RUB": 92.45
+    }
+}
