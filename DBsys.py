@@ -1938,7 +1938,7 @@ def get_latest_recommendation_per_asset(user_id):
 
 def log_audit_event(user_id, action, ip_address=None, details=None):
     """
-    Never raises - a logging failure should never take down the operation
+    Never raises a logging failure should never take down the operation
     that triggered it. Prints a warning instead if the insert fails.
     """
     try:
