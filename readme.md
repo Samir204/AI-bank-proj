@@ -1,4 +1,4 @@
-# Personal Banking System
+# AI Bank Project
 
 > A desktop banking application built in Python featuring a relational SQL database, AI-powered banking assistant, user authentication, transactions, scheduled payments, and account management.
 
