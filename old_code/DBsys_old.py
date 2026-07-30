@@ -4,9 +4,7 @@ import shutil
 import time
 from decimal import Decimal
 import random
-import string
 import hashlib
-import bcrypt
 from datetime import datetime, date, timedelta
 import calendar
 import secrets
@@ -146,125 +144,6 @@ def creat_new_user():
     return True
 
 
-def _hash_password(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-
-def _verify_password(password, password_hash):
-    return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
-
-
-def register_user(full_name, email, phone_number, national_id, date_of_birth,
-                   address, password):
-    """
-    Non interactive registration for GUI/API use (creat_new_user() above is
-    interactive and never stored a password at all, so login had nothing to
-    verify against). Creates the users row AND the matching user_security
-    row together; if either insert fails, both are rolled back so we never
-    end up with a user who has no way to log in, or vice versa.
-
-    Returns (True, user_id) on success, (False, reason) on failure.
-    """
-    try:
-        conn.start_transaction()
-
-        cursor.execute(
-            """
-            INSERT INTO users
-            (full_name, email, phone_number, national_id, date_of_birth, address)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (full_name, email, phone_number, national_id, date_of_birth, address)
-        )
-        user_id = cursor.lastrowid
-
-        password_hash = _hash_password(password)
-        cursor.execute(
-            "INSERT INTO user_security (user_id, password_hash) VALUES (%s, %s)",
-            (user_id, password_hash)
-        )
-
-        conn.commit()
-        return True, user_id
-
-    except mysql.connector.errors.IntegrityError:
-        conn.rollback()
-        return False, "A user with that email, phone number, or national ID already exists."
-    except mysql.connector.Error as err:
-        conn.rollback()
-        return False, f"Database error: {err}"
-
-
-MAX_FAILED_LOGIN_ATTEMPTS = 5
-LOCKOUT_MINUTES = 15
-
-
-def authenticate_user(user_id, full_name, password):
-    """
-    Verifies user_id + full_name + password against the database, with
-    standard bank style lockout after repeated failed attempts. On success,
-    issues a session (see create_session()) and returns it so the caller
-    doesn't have to make a second call.
-
-    Returns (True, {"user_id":, "session_id":, "token":}) on success,
-    or (False, reason) on failure.
-    """
-    cursor.execute(
-        """
-        SELECT u.full_name, s.password_hash, s.failed_login_count, s.locked_until
-        FROM users u
-        JOIN user_security s ON s.user_id = u.user_id
-        WHERE u.user_id = %s
-        """,
-        (user_id,)
-    )
-    row = cursor.fetchone()
-    if row is None:
-        return False, "No such user."
-
-    stored_name, password_hash, failed_count, locked_until = row
-
-    if locked_until and locked_until > datetime.now():
-        return False, f"Account locked until {locked_until} due to repeated failed logins."
-
-    if stored_name.strip().lower() != full_name.strip().lower():
-        return False, "Name doesn't match our records for this user ID."
-
-    if not _verify_password(password, password_hash):
-        failed_count += 1
-        if failed_count >= MAX_FAILED_LOGIN_ATTEMPTS:
-            locked_until = datetime.now() + timedelta(minutes=LOCKOUT_MINUTES)
-            cursor.execute(
-                "UPDATE user_security SET failed_login_count = %s, locked_until = %s WHERE user_id = %s",
-                (failed_count, locked_until, user_id)
-            )
-            conn.commit()
-            log_audit_event(user_id, "LOGIN_LOCKED_OUT")
-            return False, f"Too many failed attempts. Account locked for {LOCKOUT_MINUTES} minutes."
-        else:
-            cursor.execute(
-                "UPDATE user_security SET failed_login_count = %s WHERE user_id = %s",
-                (failed_count, user_id)
-            )
-            conn.commit()
-            log_audit_event(user_id, "LOGIN_FAILED")
-            return False, "Incorrect password."
-
-    # success - reset the failed counter and stamp last_login_at
-    cursor.execute(
-        """
-        UPDATE user_security
-        SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW()
-        WHERE user_id = %s
-        """,
-        (user_id,)
-    )
-    conn.commit()
-
-    session_id, token = create_session(user_id)
-    return True, {"user_id": user_id, "session_id": session_id, "token": token}
-
-
 # just for printing the user's data, i mainly did it for debuging and 
 # shecking if the data got saved 
 def get_user_full_data(user_id):
@@ -362,32 +241,7 @@ def edit_user_info(id, pin):
 
 
 # for seting a new account
-def generate_iban(country_code='PT', bank_code='0002'):
-    """
-    Generates a plausible looking, unique IBAN for this bank's own accounts.
-    NOT a real, checksum valid IBAN per ISO 13616 fine for a student
-    project's internal accounts, but don't use this to actually receive
-    real international transfers.
-    """
-    for _ in range(10):
-        account_digits = ''.join(secrets.choice(string.digits) for _ in range(19))
-        iban = f"{country_code}50{bank_code}{account_digits}"[:25]
-        cursor.execute("SELECT 1 FROM accounts WHERE iban = %s", (iban,))
-        if cursor.fetchone() is None:
-            return iban
-    return None
-
-
-def creat_new_account(user_id, iban=None):
-    """
-    Creates an account for an existing user. Pass an IBAN, or leave it None
-    to have one generated automatically. Returns (True, account_id) on
-    success, (False, reason) on failure.
-    """
-    if iban is None:
-        iban = generate_iban()
-        if iban is None:
-            return False, "Could not generate a unique IBAN."
+def creat_new_account(user_id, iban):
 
     try:
         cursor.execute(
@@ -397,19 +251,21 @@ def creat_new_account(user_id, iban=None):
             (user_id, iban)
         )
     except mysql.connector.errors.IntegrityError:
-        return False, "Account exists with similar user_id or iban"
+        print("Account exists with similar user_id or iban")
+        return False
 
     conn.commit()
 
     account_id = cursor.lastrowid
 
     cursor.execute(
-        "SELECT * FROM accounts WHERE account_id = %s",
+        "SELECT * FROM accounts WHERE user_id = %s",
         (account_id,)
     )
+    
 
     print(cursor.fetchone())
-    return True, account_id
+    return True    
 
 
 # getting the acount useing the account id
@@ -1084,7 +940,7 @@ def is_card_active(card_id):
 
 def is_card_expired(card_id):
     """
-    Checks the actual expiry_date, not just the status column status only
+    Checks the actual expiry_date, not just the status column - status only
     gets flipped to 'expired' when expire_cards() runs, so relying on status
     alone would say a card is fine right up until the next batch run even
     if its expiry date has already passed.
@@ -1171,7 +1027,7 @@ def count_blocked_cards(account_id):
 
 def find_card_by_last_four(last_four):
     """
-    Returns ALL matching cards, not just one the last 4 digits are only
+    Returns ALL matching cards, not just one - the last 4 digits are only
     10,000 possible combinations, so they're not unique across a real card
     base. Use this to narrow down candidates (e.g. 'which of your cards
     ends in 1234?'), not as a unique lookup key.
@@ -1214,7 +1070,7 @@ def _account_exists(account_id):
 def purchase(card_id, merchant_account_id, amount):
     """
     A card purchase: debits the cardholder via the card (so daily_limit,
-    active/expiry checks, locking, and the ledger all apply the same
+    active/expiry checks, locking, and the ledger all apply - the same
     protections withdraw_via_card() gives any other card withdrawal) and
     credits the merchant's account. If crediting the merchant fails for any
     reason, the cardholder is refunded and the original debit is marked
@@ -1292,37 +1148,6 @@ def transfer(card_id, destination_account_id, amount):
         return False, f"Transfer failed and was refunded: {credit_result}"
 
     return True, {"debit_transaction": debit_result, "credit_transaction": credit_result}
-
-
-# ========================================================================
-#               MBWay Links
-# ========================================================================
-
-def add_mbway_link(account_id, phone_number):
-    """Links a phone number to an account for MBWay withdrawals/payments."""
-    try:
-        cursor.execute(
-            "INSERT INTO mbway_links (account_id, phone_number) VALUES (%s, %s)",
-            (account_id, phone_number)
-        )
-        conn.commit()
-        return True, cursor.lastrowid
-    except mysql.connector.errors.IntegrityError:
-        return False, "That phone number is already linked to an account."
-
-
-def get_mbway_links(account_id):
-    cursor.execute(
-        "SELECT mbway_id, phone_number, status FROM mbway_links WHERE account_id = %s",
-        (account_id,)
-    )
-    return cursor.fetchall()
-
-
-def remove_mbway_link(mbway_id):
-    cursor.execute("DELETE FROM mbway_links WHERE mbway_id = %s", (mbway_id,))
-    conn.commit()
-    return cursor.rowcount > 0
 
 
 
@@ -1598,8 +1423,8 @@ def withdraw_via_mbway(mbway_id, amount):
 
 def deposit_funds(account_id, amount, description=None):
     """
-    Ledger backed deposit. Prefer this over the plain deposit() above going
-    forward this one locks the row and writes a transactions record;
+    Ledger-backed deposit. Prefer this over the plain deposit() above going
+    forward - this one locks the row and writes a transactions record;
     deposit() does neither.
     """
     amount = Decimal(str(amount))
@@ -1633,7 +1458,7 @@ def deposit_funds(account_id, amount, description=None):
 
 def reverse_transaction(transaction_id, reason=None):
     """
-    Reversal/chargeback support standard for disputed payments, failed
+    Reversal/chargeback support - standard for disputed payments, failed
     downstream processing, or fraud response. Rather than editing the
     original row, the original is marked 'reversed' and a brand new
     transaction moves the money back, so the ledger keeps an honest,
@@ -1661,7 +1486,7 @@ def reverse_transaction(transaction_id, reason=None):
             return False, f"Only completed transactions can be reversed (current status: {status})."
         if from_account_id is None or to_account_id is None:
             conn.rollback()
-            return False, "Can't auto reverse a transaction with an external leg handle manually."
+            return False, "Can't auto-reverse a transaction with an external leg - handle manually."
 
         first_id, second_id = sorted([from_account_id, to_account_id])
         _lock_account(first_id)
@@ -1691,7 +1516,7 @@ def reverse_transaction(transaction_id, reason=None):
 
 
 def get_transaction_history(account_id, start_date=None, end_date=None, limit=50, offset=0):
-    """Paginated statement-style history what a bank app shows under 'Transactions'."""
+    """Paginated statement-style history - what a bank app shows under 'Transactions'."""
     query = """
         SELECT transaction_id, from_account_id, to_account_id, amount, currency,
                transaction_type, status, reference, description, created_at
@@ -1729,7 +1554,7 @@ def _generate_reference_code():
 
 def generate_payment_code(account_id, amount, description=None, valid_days=1):
     """
-    Creates a payment reference a merchant/biller can hand to a payer like
+    Creates a payment reference a merchant/biller can hand to a payer - like
     a Multibanco reference in Portugal, or a virtual account number
     elsewhere. Whoever pays the code sends money straight to account_id.
     """
@@ -1758,7 +1583,7 @@ def generate_payment_code(account_id, amount, description=None, valid_days=1):
 
 
 def check_payment_code(code):
-    """Preview a code before paying it like scanning a reference to see the amount due."""
+    """Preview a code before paying it - like scanning a reference to see the amount due."""
     cursor.execute(
         "SELECT account_id, amount, description, is_used, expires_at FROM payment_codes WHERE code = %s",
         (code,)
@@ -1771,12 +1596,12 @@ def check_payment_code(code):
 
 def pay_with_code(payer_account_id, code):
     """
-    Pays a payment code like entering a Multibanco reference at an ATM
+    Pays a payment code - like entering a Multibanco reference at an ATM
     or in home banking. Marking the code used and moving the money can't be
     a single call to transfer_funds() (it opens its own transaction), so
-    this uses a compensating action pattern: mark the code used, then if
+    this uses a compensating-action pattern: mark the code used, then if
     the transfer fails, undo that flag. This "saga" style is genuinely how
-    real distributed banking systems coordinate multi step operations.
+    real distributed banking systems coordinate multi-step operations.
     """
     try:
         conn.start_transaction()
@@ -1968,7 +1793,9 @@ def check_if_theres_payments(account_id):
 # ========================================================================
 #               Market Data + AI Recommendations
 # ========================================================================
-# Nothing here writes to accounts/transactions.
+# Kept logically separate from the money-movement tables on purpose: a bug
+# in the market scraper or the AI advisor should never be able to touch a
+# real account balance, so nothing here writes to accounts/transactions.
 
 def add_market_asset(symbol, name, asset_type='stock'):
     """asset_type: 'stock', 'etf', or 'crypto'."""
@@ -1990,8 +1817,8 @@ def get_asset_by_symbol(symbol):
 
 def record_market_price(asset_id, price):
     """
-    Call this every time scraper pulls a fresh quote. Prices are
-    append only (never overwritten or updated in place) so you keep a full
+    Call this every time your scraper pulls a fresh quote. Prices are
+    append-only (never overwritten or updated in place) so you keep a full
     price history to chart and to feed the AI recommender.
     """
     price = Decimal(str(price))
@@ -2019,8 +1846,8 @@ def get_latest_price(asset_id):
 
 def is_price_stale(asset_id, max_age_minutes=15):
     """
-    Real trading/advisory systems refuse to act on a quote that's too old
-    acting on a stale price is how to end up recommending a 'buy' at a
+    Real trading/advisory systems refuse to act on a quote that's too old -
+    acting on a stale price is how you end up recommending a 'buy' at a
     price that isn't real anymore.
     """
     row = get_latest_price(asset_id)
@@ -2080,7 +1907,7 @@ def get_recommendations_for_user(user_id, limit=20):
 
 def get_latest_recommendation_per_asset(user_id):
     """
-    Only the most recent recommendation per asset a user shouldn't see a
+    Only the most recent recommendation per asset - a user shouldn't see a
     three-day-old 'buy' sitting next to today's 'sell' for the same stock.
     """
     cursor.execute(
@@ -2106,7 +1933,8 @@ def get_latest_recommendation_per_asset(user_id):
 # ========================================================================
 # Every action that touches money, auth, or account status should write a
 # row here. Real banks log this by regulatory requirement (traceability
-# for fraud investigations and disputes).
+# for fraud investigations and disputes) - it isn't optional the way it
+# might feel for a student project.
 
 def log_audit_event(user_id, action, ip_address=None, details=None):
     """
@@ -2144,7 +1972,7 @@ def get_audit_log_for_user(user_id, limit=50):
 
 
 def get_recent_audit_events(limit=100):
-    """Global activity feed, what an ops/admin dashboard would show."""
+    """Global activity feed - what an ops/admin dashboard would show."""
     cursor.execute(
         "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT %s",
         (limit,)
@@ -2154,7 +1982,7 @@ def get_recent_audit_events(limit=100):
 
 def search_audit_log(action=None, user_id=None, start_date=None, end_date=None, limit=100):
     """
-    Flexible filter for compliance/fraud investigations, e.g. 'show me
+    Flexible filter for compliance/fraud investigations - e.g. 'show me
     every withdrawal across all users in the last 24 hours.'
     """
     query = "SELECT * FROM audit_log WHERE 1=1"
@@ -2182,7 +2010,7 @@ def search_audit_log(action=None, user_id=None, start_date=None, end_date=None, 
 #               Sessions (login/logout, token-based auth)
 # ========================================================================
 # Same principle as the password/masterKey hashing from your earlier
-# password manager project: the raw session token is shown to the caller
+# password-manager project: the raw session token is shown to the caller
 # ONCE and only its hash is stored, so a leaked database dump doesn't hand
 # out working login sessions.
 
@@ -2218,7 +2046,7 @@ def create_session(user_id, expires_in_minutes=30):
 def validate_session(raw_token):
     """
     Call this on every authenticated request. Returns the user_id if the
-    token is valid, not revoked, and not expired, otherwise None.
+    token is valid, not revoked, and not expired - otherwise None.
     """
     token_hash = _hash_token(raw_token)
     cursor.execute(
@@ -2255,7 +2083,7 @@ def revoke_all_sessions_for_user(user_id):
 
 
 def get_active_sessions_for_user(user_id):
-    """'Manage your devices' screen -> active, non-revoked, non-expired sessions."""
+    """'Manage your devices' screen - active, non-revoked, non-expired sessions."""
     cursor.execute(
         """
         SELECT session_id, created_at, expires_at
@@ -2270,8 +2098,8 @@ def get_active_sessions_for_user(user_id):
 
 def cleanup_expired_sessions():
     """
-    Periodic maintenance job (same batch job pattern as
-    process_due_scheduled_payments()), clears out sessions that expired a
+    Periodic maintenance job (same batch-job pattern as
+    process_due_scheduled_payments()) - clears out sessions that expired a
     while ago so the table doesn't grow forever.
     """
     cursor.execute("DELETE FROM sessions WHERE expires_at < NOW() - INTERVAL 7 DAY")
@@ -2284,7 +2112,7 @@ def cleanup_expired_sessions():
 # ========================================================================
 
 def get_account_overview(user_id):
-    """Quick balance + account summary, what user_account_overview was built for."""
+    """Quick balance + account summary - what user_account_overview was built for."""
     cursor.execute("SELECT * FROM user_account_overview WHERE user_id = %s", (user_id,))
     return cursor.fetchall()
 
@@ -2295,43 +2123,8 @@ def get_upcoming_payments_for_user(user_id):
 
 
 def get_all_upcoming_payments():
-    """Ops style view across every user, which standing orders are due in the next 7 days."""
+    """Ops-style view across every user - which standing orders are due in the next 7 days."""
     cursor.execute("SELECT * FROM upcoming_payments")
-    return cursor.fetchall()
-
-
-def get_scheduled_payments_for_user(user_id):
-    """
-    ALL of a user's scheduled payments regardless of due date (unlike the
-    upcoming_payments view, which only shows what's due in the next 7 days),
-    for a 'manage my standing orders' screen.
-    """
-    cursor.execute(
-        """
-        SELECT sp.scheduled_id, sp.account_id, sp.payee_iban, sp.amount,
-               sp.frequency, sp.next_due_date, sp.status, sp.description
-        FROM scheduled_payments sp
-        JOIN accounts a ON a.account_id = sp.account_id
-        WHERE a.user_id = %s
-        ORDER BY sp.next_due_date
-        """,
-        (user_id,)
-    )
-    return cursor.fetchall()
-
-
-def get_cards_for_user(user_id):
-    """All cards across every account belonging to this user."""
-    cursor.execute(
-        """
-        SELECT c.card_id, c.account_id, c.last_four, c.card_type,
-               c.expiry_date, c.daily_limit, c.status
-        FROM cards c
-        JOIN accounts a ON a.account_id = c.account_id
-        WHERE a.user_id = %s
-        """,
-        (user_id,)
-    )
     return cursor.fetchall()
 
 

@@ -17,21 +17,17 @@ from DBsys import (
 # ============================================================================
 # Client setup
 # ============================================================================
-#
+# NEVER hardcode API keys in source, especially in a repo you plan to push to
+# GitHub  a key sitting in plaintext in your portfolio project is a leaked
+# key the moment the repo goes public. Set it in your shell instead:
+
+
+
 #   export GEMINI_API_KEY="your-key-here"
+#
 # (or put it in a .env file loaded with python dotenv, if you'd rather not
 # type it every session).
-#
-# API_KEY = os.environ.get("GEMINI_API_KEY")
-# if not API_KEY:
-#     raise RuntimeError(
-#         "GEMINI_API_KEY environment variable not set. "
-#         "Run: export GEMINI_API_KEY='your-key-here' before starting the app."
-#     )
 
-# client = genai.Client(api_key=API_KEY)
-# MODEL = "gemini-3.1-flash-lite"
-# ==>>
 
 
 client = genai.Client(api_key="")
@@ -51,7 +47,7 @@ history = []
 def _parse_json_response(text):
     """
     Gemini sometimes wraps JSON in ```json ... ``` fences even when told to
-    return ONLY JSON. so im stripping that before parsing instead of letting
+    return ONLY JSON. Strip that before parsing instead of letting
     json.loads() blow up on real (if uncommon) responses.
     """
     text = text.strip()
@@ -73,7 +69,7 @@ def _build_bank_context(user_id):
     Pulls the user's own bank data (READ-ONLY) so the assistant can answer
     'my balance/my payments/my recommendations' questions accurately.
 
-    IMPORTANT: this only ever calls read functions from DBsys get_*, i never
+    IMPORTANT: this only ever calls read functions from DBsys get_*, never
     transfer_funds/withdraw_*/deposit_funds/etc. The chat assistant can look
     things up and advise, but it never gets a path to actually move money;
     any real transaction still has to go through your normal, explicitly
@@ -146,44 +142,18 @@ def _ask_with_cache(prompt):
 # Chat
 # ============================================================================
 
-def get_ai_response(user_id, question):
+def chat(user_id):
     """
-    Non blocking, single-turn version of the same logic chat() uses in a
-    loop built for GUI/API callers that can't sit inside an input() loop.
-    Returns (response_text, used_cached_prices).
+    Interactive chat loop for an already authenticated user.
+
+    user_id should come from your login flow (e.g. validate_session()) 
+    this function assumes login already happened; it doesn't do auth itself.
+    Every question is answered with the user's own bank context attached,
+    and every exchange is written to the audit log for traceability (the
+    same principle as logging any other sensitive account activity).
     """
     bank_context = _build_bank_context(user_id)
 
-    prompt = (
-        "You are a banking assistant. Use the account data below to answer "
-        "the user's question about their own finances or about markets/"
-        "commodities/currencies they ask about. You are NOT able to move "
-        "money yourself if the user wants to actually make a transaction, "
-        "tell them to do it through the app directly; only give information "
-        "and advice.\n\n"
-        f"{bank_context}\n\nUSER QUESTION: {question}"
-    )
-
-    response_text = _ask_with_search(prompt)
-    used_cache = False
-    if response_text is None:
-        response_text = _ask_with_cache(prompt)
-        used_cache = True
-
-    log_audit_event(
-        user_id, "AI_CHAT_QUERY",
-        details={"question": question, "used_cached_prices": used_cache}
-    )
-
-    return response_text, used_cache
-
-
-def chat(user_id):
-    """
-    Interactive CLI chat loop for an already authenticated user. Thin
-    wrapper around get_ai_response() so the CLI and GUI paths can't drift
-    out of sync with each other.
-    """
     while True:
         user_input = input(" --> You: ")
 
@@ -193,9 +163,28 @@ def chat(user_id):
 
         history.append({"role": "user", "input": user_input})
 
-        response_text, used_cache = get_ai_response(user_id, user_input)
+        prompt = (
+            "You are a banking assistant. Use the account data below to answer "
+            "the user's question about their own finances or about markets/"
+            "commodities/currencies they ask about. You are NOT able to move "
+            "money yourself if the user wants to actually make a transaction, "
+            "tell them to do it through the app directly; only give information "
+            "and advice.\n\n"
+            f"{bank_context}\n\nUSER QUESTION: {user_input}"
+        )
+
+        response_text = _ask_with_search(prompt)
+        used_cache = False
+        if response_text is None:
+            response_text = _ask_with_cache(prompt)
+            used_cache = True
 
         history.append({"role": "AI", "output": response_text})
+
+        log_audit_event(
+            user_id, "AI_CHAT_QUERY",
+            details={"question": user_input, "used_cached_prices": used_cache}
+        )
 
         print(response_text)
         print()
@@ -290,5 +279,5 @@ def update_commodities():
 
 
 # update_commodities()
-# chat(user_id=1)
+chat(user_id=1)
 # get_history(history)
