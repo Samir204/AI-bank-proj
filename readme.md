@@ -173,14 +173,6 @@ If I Started Again Today I'd probably change a few things:
 
 ---
 
-## If I Started Again Today
-
-- Split `DBsys.py` into smaller modules.
-- Add automated testing earlier.
-- Design reusable GUI components from the beginning.
-
----
-
 ## Final Thoughts
 
 I'm currently a Computer Science student going into my third year, with most of my experience coming from C, Java, Haskell, SQL, Algorithms, OOP, functional and imperative programming, Logic, Applied Probability and algebra.
