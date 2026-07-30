@@ -26,15 +26,7 @@ The project is still a work in progress, but it's reached the point where I'm ha
 
 ## Screenshots
 
-> *(Coming soon)*
-
-| Login | Dashboard |
-|:------:|:---------:|
-| ![](images/login.png) | ![](images/dashboard.png) |
-
-| AI Assistant | Transactions |
-|:------------:|:------------:|
-| ![](images/ai.png) | ![](images/transactions.png) |
+ --> Check the screenshots folder
 
 ---
 
