@@ -17,11 +17,6 @@ from DBsys import (
 # ============================================================================
 # Client setup
 # ============================================================================
-# NEVER hardcode API keys in source, especially in a repo you plan to push to
-# GitHub  a key sitting in plaintext in your portfolio project is a leaked
-# key the moment the repo goes public. Set it in your shell instead:
-
-
 
 #   export GEMINI_API_KEY="your-key-here"
 #
